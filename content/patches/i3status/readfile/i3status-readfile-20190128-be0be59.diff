@@ -1,0 +1,230 @@
+From c9c8ec50d84127a7836d6a332f00fa9cfbb0b638 Mon Sep 17 00:00:00 2001
+From: Dennis Vesterlund <dennisvesterlund@gmail.com>
+Date: Wed, 16 Jan 2019 18:46:56 +0100
+Subject: [PATCH] Added function for printing files
+
+Added funtion to print content of file to statusline.
+---
+ i3status.c                                    | 18 +++++
+ include/i3status.h                            |  1 +
+ man/i3status.man                              | 22 ++++++
+ src/print_file_contents.c                     | 72 +++++++++++++++++++
+ .../025-file-contents/expected_output.txt     |  1 +
+ testcases/025-file-contents/i3status.conf     | 14 ++++
+ testcases/025-file-contents/short.txt         |  1 +
+ 7 files changed, 129 insertions(+)
+ create mode 100644 src/print_file_contents.c
+ create mode 100644 testcases/025-file-contents/expected_output.txt
+ create mode 100644 testcases/025-file-contents/i3status.conf
+ create mode 100644 testcases/025-file-contents/short.txt
+
+diff --git a/i3status.c b/i3status.c
+index 36789f4..922beec 100644
+--- a/i3status.c
++++ b/i3status.c
+@@ -491,6 +491,17 @@ int main(int argc, char *argv[]) {
+         CFG_CUSTOM_SEP_BLOCK_WIDTH_OPT,
+         CFG_END()};
+ 
++    cfg_opt_t read_opts[] = {
++        CFG_STR("format", "%content", CFGF_NONE),
++        CFG_STR("path", NULL, CFGF_NONE),
++        CFG_INT("max_characters", 255, CFGF_NONE),
++        CFG_CUSTOM_ALIGN_OPT,
++        CFG_CUSTOM_COLOR_OPTS,
++        CFG_CUSTOM_MIN_WIDTH_OPT,
++        CFG_CUSTOM_SEPARATOR_OPT,
++        CFG_CUSTOM_SEP_BLOCK_WIDTH_OPT,
++        CFG_END()};
++
+     cfg_opt_t opts[] = {
+         CFG_STR_LIST("order", "{}", CFGF_NONE),
+         CFG_SEC("general", general_opts, CFGF_NONE),
+@@ -509,6 +520,7 @@ int main(int argc, char *argv[]) {
+         CFG_SEC("load", load_opts, CFGF_NONE),
+         CFG_SEC("memory", memory_opts, CFGF_NONE),
+         CFG_SEC("cpu_usage", usage_opts, CFGF_NONE),
++        CFG_SEC("read_file", read_opts, CFGF_TITLE | CFGF_MULTI),
+         CFG_END()};
+ 
+     char *configfile = NULL;
+@@ -787,6 +799,12 @@ int main(int argc, char *argv[]) {
+                 print_cpu_usage(json_gen, buffer, cfg_getstr(sec, "format"), cfg_getstr(sec, "format_above_threshold"), cfg_getstr(sec, "format_above_degraded_threshold"), cfg_getstr(sec, "path"), cfg_getfloat(sec, "max_threshold"), cfg_getfloat(sec, "degraded_threshold"));
+                 SEC_CLOSE_MAP;
+             }
++
++            CASE_SEC_TITLE("read_file") {
++                SEC_OPEN_MAP("read_file");
++                print_file_contents(json_gen, buffer, title, cfg_getstr(sec, "path"), cfg_getstr(sec, "format"), cfg_getint(sec, "max_characters"));
++                SEC_CLOSE_MAP;
++            }
+         }
+         if (output_format == O_I3BAR) {
+             yajl_gen_array_close(json_gen);
+diff --git a/include/i3status.h b/include/i3status.h
+index d79ab28..cb16b67 100644
+--- a/include/i3status.h
++++ b/include/i3status.h
+@@ -229,6 +229,7 @@ void print_volume(yajl_gen json_gen, char *buffer, const char *fmt, const char *
+ bool process_runs(const char *path);
+ int volume_pulseaudio(uint32_t sink_idx, const char *sink_name);
+ bool pulse_initialize(void);
++void print_file_contents(yajl_gen json_gen, char *buffer, const char *title, const char *path, const char *format, const int max_chars);
+ 
+ /* socket file descriptor for general purposes */
+ extern int general_socket;
+diff --git a/man/i3status.man b/man/i3status.man
+index cc363f5..df0ff16 100644
+--- a/man/i3status.man
++++ b/man/i3status.man
+@@ -123,6 +123,11 @@ memory {
+ disk "/" {
+ 	format = "%free"
+ }
++
++read_file uptime {
++	path = "/proc/uptime"
++}
++
+ -------------------------------------------------------------
+ 
+ === General
+@@ -611,6 +616,23 @@ volume master {
+ }
+ -------------------------------------------------------------
+ 
++=== File Contents
++
++Outputs the contents of the specified file. You can use this to check contents
++of files on your system, for example /proc/uptime. By default the function only
++reads the first 254 characters of the file, if you want to override this set 
++the Max_characters option. It will never read beyond the first 4095 characters.
++If the file is not found "no file" will be printed, if the file can't be read
++"error read" will be printed.
++
++*Example order*: read_file UPTIME
++
++*Example format*: "%title: %content"
++
++*Example path*: "/proc/uptime"
++
++*Example Max_characters*: 255
++
+ == Universal module options
+ 
+ When using the i3bar output format, there are a few additional options that
+diff --git a/src/print_file_contents.c b/src/print_file_contents.c
+new file mode 100644
+index 0000000..975902d
+--- /dev/null
++++ b/src/print_file_contents.c
+@@ -0,0 +1,72 @@
++// vim:ts=4:sw=4:expandtab
++
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <yajl/yajl_gen.h>
++#include <yajl/yajl_version.h>
++#include <sys/types.h>
++
++#include <sys/stat.h>
++#include <sys/fcntl.h>
++#include <unistd.h>
++#include "i3status.h"
++
++static void *scalloc(size_t size) {
++    void *result = calloc(size, 1);
++    if (result == NULL) {
++        die("Error: out of memory (calloc(%zu))\n", size);
++    }
++    return result;
++}
++
++void print_file_contents(yajl_gen json_gen, char *buffer, const char *title, const char *path, const char *format, const int max_chars) {
++    const char *walk = format;
++    char *outwalk = buffer;
++
++    /* Check if file exists */
++    struct stat st;
++    const bool exists = (stat(path, &st) == 0);
++
++    int chars = ((max_chars + 1) < 4096 ? max_chars + 1 : 4096);
++    char *filebuff = scalloc(chars * sizeof(char));
++
++    int fd;
++    int n = -1;
++    if ((fd = open(path, O_RDONLY)) > -1) {
++        n = read(fd, filebuff, chars - 1);
++        if (n != -1)
++            filebuff[n] = '\0';
++        (void)close(fd);
++    }
++
++    INSTANCE(path);
++
++    START_COLOR((exists && n > -1 ? "color_good" : "color_bad"));
++
++    for (; *walk != '\0'; walk++) {
++        if (*walk != '%') {
++            *(outwalk++) = *walk;
++        } else if (BEGINS_WITH(walk + 1, "title")) {
++            outwalk += sprintf(outwalk, "%s", title);
++            walk += strlen("title");
++        } else if (BEGINS_WITH(walk + 1, "content")) {
++            if (!exists || n < 0) {
++                outwalk += sprintf(outwalk, "%s", (!exists ? "no file" : "error read"));
++            } else {
++                for (char *s = filebuff; *s != '\0' && n > 0; s++, n--) {
++                    if (*s != '\n')
++                        *(outwalk++) = *s;
++                }
++            }
++            walk += strlen("content");
++        } else {
++            *(outwalk++) = '%';
++        }
++    }
++
++    free(filebuff);
++
++    END_COLOR;
++    OUTPUT_FULL_TEXT(buffer);
++}
+diff --git a/testcases/025-file-contents/expected_output.txt b/testcases/025-file-contents/expected_output.txt
+new file mode 100644
+index 0000000..c3c1363
+--- /dev/null
++++ b/testcases/025-file-contents/expected_output.txt
+@@ -0,0 +1 @@
++contents | no file
+diff --git a/testcases/025-file-contents/i3status.conf b/testcases/025-file-contents/i3status.conf
+new file mode 100644
+index 0000000..26646cd
+--- /dev/null
++++ b/testcases/025-file-contents/i3status.conf
+@@ -0,0 +1,14 @@
++general {
++        output_format = "none"
++}
++
++order += "read_file EXISTING"
++order += "read_file NONEXISTANT"
++
++read_file EXISTING {
++        path = "testcases/025-file-contents/short.txt"
++}
++
++read_file NONEXISTANT {
++        path = "testcases/025-file-contents/nonexistant"
++}
+diff --git a/testcases/025-file-contents/short.txt b/testcases/025-file-contents/short.txt
+new file mode 100644
+index 0000000..12f00e9
+--- /dev/null
++++ b/testcases/025-file-contents/short.txt
+@@ -0,0 +1 @@
++contents
+-- 
+2.20.1
+
