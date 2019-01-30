@@ -1,9 +1,7 @@
 ---
 title: "Patches"
 date: 2019-01-28T10:07:16+01:00
-draft: true
 description: "General patches"
-
 type: "page"
 
 creatordisplayname: "Dennis Vesterlund"

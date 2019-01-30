@@ -1,7 +1,6 @@
 ---
 title: "Readfile"
 date: 2019-01-28T10:13:56+01:00
-draft: true
 description: "Readfile adds functionality to print file contents"
 
 

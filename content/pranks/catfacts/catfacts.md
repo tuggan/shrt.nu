@@ -1,11 +1,10 @@
 ---
-title: "Pranks"
-date: 2019-01-28T22:14:52+01:00
+title: "Catfacts"
+date: 2019-01-29T18:22:04+01:00
 draft: true
-description: "A collection of office pranks"
+description: "description"
 
 type: "page"
-
 creatordisplayname: "Dennis Vesterlund"
 creatoremail: "dennisvesterlund@gmail.com"
 lastmodifierdisplayname: "Dennis Vesterlund"
@@ -13,4 +12,8 @@ lastmodifieremail: "dennisvesterlund@gmail.com"
 ---
 
 
-If i ever get to it i will place som pranks here.
+- [catfacts.ps1](../catfacts.ps1)
+
+```
+{{< include filename="pranks/catfacts/catfacts.ps1" >}}
+```

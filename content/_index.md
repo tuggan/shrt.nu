@@ -1,8 +1,6 @@
 ---
 title: "Index"
 date: 2019-01-28T10:07:16+01:00
-draft: true
-
 # Type of content, set "slide" to display it fullscreen with reveal.js
 type: "slide"
 

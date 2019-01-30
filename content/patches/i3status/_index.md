@@ -1,7 +1,6 @@
 ---
 title: "i3status"
 date: 2019-01-28T10:04:18+01:00
-draft: true
 description: "Patches for i3status"
 
 type: "page"
